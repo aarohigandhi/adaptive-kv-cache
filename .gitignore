@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Model weights & large artifacts (never commit these)
+*.pt
+*.bin
+*.safetensors
+*.gguf
+models/
+.cache/
+hf_cache/
+
+# Secrets
+.env
+.env.local
+
+# Keep results/*.json (they regenerate the plots) — only ignore scratch
+results/scratch/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
