@@ -1,4 +1,4 @@
-# Adaptive KV Cache Compression
+# Adaptive Context Compression
 
 An original KV cache compression policy for long-context LLM inference, benchmarked honestly against published baselines (StreamingLLM, H2O, SnapKV) on the quality / memory / latency triangle.
 

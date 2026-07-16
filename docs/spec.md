@@ -1,4 +1,4 @@
-# Full Spec: Project A — Adaptive KV Cache Compression for Long Context Inference
+# Full Spec: Project A — Adaptive Context Compression for Long Context Inference
 
 ## One-line pitch
 
