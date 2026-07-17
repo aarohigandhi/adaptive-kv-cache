@@ -9,7 +9,8 @@ An original KV cache compression policy for long-context LLM inference, benchmar
 
 ## Status
 
-🚧 Phase 0 — model bring-up and manual decode loop.
+✅ Phase 0 — model bring-up and a manual decode loop, verified token-for-token against `generate()`.
+🚧 Phase 1 — instrumentation (memory + latency) and baseline memory/latency-vs-context plots.
 
 ## Where things are
 
