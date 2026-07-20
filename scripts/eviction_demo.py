@@ -31,6 +31,30 @@ def snippet(tokenizer, ids, n_prompt, chars=220):
     return tokenizer.decode(ids[0, n_prompt:], skip_special_tokens=True)[:chars]
 
 
+def plot_cache_sizes(n_prompt, streaming_trace, out_path):
+    """Draw cache size vs decode step: full cache climbs, StreamingLLM stays flat."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    steps = list(range(len(streaming_trace)))
+    full_trace = [n_prompt + s for s in steps]  # full cache = prompt + tokens so far
+
+    fig, ax = plt.subplots(figsize=(7, 4.2))
+    ax.plot(steps, full_trace, linewidth=2, color="#2a6fdb", label="full cache")
+    ax.plot(steps, streaming_trace, linewidth=2, color="#e8710a", label="StreamingLLM")
+    ax.set_title("The cache stops growing", fontsize=13)
+    ax.set_xlabel("decode step (tokens generated)")
+    ax.set_ylabel("cache size (tokens)")
+    ax.grid(True, alpha=0.25)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    print("Saved", out_path)
+
+
 def main():
     tokenizer, model = load_model()
     inputs = build_inputs(tokenizer, PROMPT)
@@ -61,6 +85,9 @@ def main():
     print(snippet(tokenizer, full_ids, n_prompt))
     print("\n--- StreamingLLM text (should still read coherently) ---")
     print(snippet(tokenizer, sllm_ids, n_prompt))
+
+    os.makedirs("results", exist_ok=True)
+    plot_cache_sizes(n_prompt, trace, "results/eviction_cache_size.png")
 
 
 if __name__ == "__main__":
