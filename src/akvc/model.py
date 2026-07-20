@@ -22,13 +22,21 @@ except ModuleNotFoundError:
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
-def load_model():
-    """Load the tokenizer (words <-> numbers) and the model (the brain) on GPU."""
+def load_model(attn_implementation=None):
+    """Load the tokenizer (words <-> numbers) and the model (the brain) on GPU.
+
+    attn_implementation="eager" is required for policies that read attention
+    scores (like H2O); the default (faster) mode doesn't expose them.
+    """
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    kwargs = {}
+    if attn_implementation is not None:
+        kwargs["attn_implementation"] = attn_implementation
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         dtype=torch.float16,
         device_map="cuda",
+        **kwargs,
     )
     model.eval()  # inference mode, not training
     return tokenizer, model
@@ -85,6 +93,33 @@ def manual_decode(model, tokenizer, inputs, max_new_tokens=40):
     return torch.cat([input_ids, generated_ids], dim=1)  # prompt + reply
 
 
+def _init_importance(attentions):
+    """Per-token importance from the prefill attention: for each token, how much
+    attention did it receive, summed over every query, head, and layer."""
+    importance = None
+    for a in attentions:                 # a: [batch, heads, queries, keys]
+        # sum over heads (dim 1) then over queries (dim 1 of what's left) -> [keys]
+        score = a[0].sum(dim=0).sum(dim=0).float()
+        importance = score if importance is None else importance + score
+    return importance
+
+
+def _update_importance(importance, attentions):
+    """Add the newest token's attention (over all cached keys) to the tally,
+    and grow the tally by one slot for the token we just added."""
+    n_keys = attentions[0].shape[-1]
+    new = torch.zeros(n_keys, device=importance.device, dtype=importance.dtype)
+    for a in attentions:                 # a: [batch, heads, 1, keys]
+        new += a[0, :, 0, :].sum(dim=0).float()   # sum over heads -> [keys]
+    # importance currently covers the old keys; pad for the new token, then add.
+    pad = n_keys - importance.shape[0]
+    if pad > 0:
+        importance = torch.cat(
+            [importance, torch.zeros(pad, device=importance.device, dtype=importance.dtype)]
+        )
+    return importance + new
+
+
 @torch.no_grad()
 def decode_with_policy(
     model, tokenizer, inputs, policy, budget, max_new_tokens=64, return_trace=False
@@ -94,23 +129,35 @@ def decode_with_policy(
     Before each new token, we ask the policy which positions to keep (given the
     current cache length and the budget) and physically evict the rest. The
     result: the cache never grows past `budget`, instead of growing forever.
+
+    If the policy needs attention scores (policy.needs_attention), we collect
+    them each step and keep a running per-token importance tally to hand it.
     """
+    needs_attn = getattr(policy, "needs_attention", False)
     input_ids = inputs["input_ids"]
     attn = inputs["attention_mask"]
 
-    # Prefill (same as before): build the cache, predict the first new token.
-    out = model(input_ids=input_ids, attention_mask=attn, use_cache=True)
+    # Prefill: build the cache, predict the first new token.
+    out = model(
+        input_ids=input_ids, attention_mask=attn,
+        use_cache=True, output_attentions=needs_attn,
+    )
     past = out.past_key_values
+    importance = _init_importance(out.attentions) if needs_attn else None
     next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
     generated = [next_token]
     trace = [cache_length(past)]
 
     for _ in range(max_new_tokens - 1):
-        # 1) ask the policy what to keep, and evict the rest
+        # 1) ask the policy what to keep, and evict the rest (from cache + tally)
         n = cache_length(past)
-        keep = policy.keep_indices(n, budget)
+        stats = {"importance": importance} if needs_attn else None
+        keep = policy.keep_indices(n, budget, stats)
         if len(keep) < n:
             evict(past, keep)
+            if needs_attn:
+                keep_idx = torch.as_tensor(keep, dtype=torch.long, device=importance.device)
+                importance = importance.index_select(0, keep_idx)
 
         # 2) attention mask must match the (possibly trimmed) cache + the new token
         n = cache_length(past)
@@ -122,8 +169,11 @@ def decode_with_policy(
             attention_mask=attn,
             past_key_values=past,
             use_cache=True,
+            output_attentions=needs_attn,
         )
         past = out.past_key_values
+        if needs_attn:
+            importance = _update_importance(importance, out.attentions)
         next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
         generated.append(next_token)
         trace.append(cache_length(past))
