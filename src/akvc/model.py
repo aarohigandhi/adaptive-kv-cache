@@ -12,6 +12,13 @@ Run in Colab (with a GPU) to verify:
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# Import the cache helpers whether this file is imported as a package
+# (akvc.model) or run directly as a loose script.
+try:
+    from akvc.cache_manager import cache_length, evict
+except ModuleNotFoundError:
+    from cache_manager import cache_length, evict
+
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
@@ -76,6 +83,57 @@ def manual_decode(model, tokenizer, inputs, max_new_tokens=40):
 
     generated_ids = torch.cat(generated, dim=1)
     return torch.cat([input_ids, generated_ids], dim=1)  # prompt + reply
+
+
+@torch.no_grad()
+def decode_with_policy(
+    model, tokenizer, inputs, policy, budget, max_new_tokens=64, return_trace=False
+):
+    """Greedy decode, but apply an eviction `policy` to the cache each step.
+
+    Before each new token, we ask the policy which positions to keep (given the
+    current cache length and the budget) and physically evict the rest. The
+    result: the cache never grows past `budget`, instead of growing forever.
+    """
+    input_ids = inputs["input_ids"]
+    attn = inputs["attention_mask"]
+
+    # Prefill (same as before): build the cache, predict the first new token.
+    out = model(input_ids=input_ids, attention_mask=attn, use_cache=True)
+    past = out.past_key_values
+    next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+    generated = [next_token]
+    trace = [cache_length(past)]
+
+    for _ in range(max_new_tokens - 1):
+        # 1) ask the policy what to keep, and evict the rest
+        n = cache_length(past)
+        keep = policy.keep_indices(n, budget)
+        if len(keep) < n:
+            evict(past, keep)
+
+        # 2) attention mask must match the (possibly trimmed) cache + the new token
+        n = cache_length(past)
+        attn = torch.ones((1, n + 1), dtype=torch.long, device=input_ids.device)
+
+        # 3) one decode step
+        out = model(
+            input_ids=next_token,
+            attention_mask=attn,
+            past_key_values=past,
+            use_cache=True,
+        )
+        past = out.past_key_values
+        next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+        generated.append(next_token)
+        trace.append(cache_length(past))
+
+        if next_token.item() == tokenizer.eos_token_id:
+            break
+
+    generated_ids = torch.cat(generated, dim=1)
+    full = torch.cat([input_ids, generated_ids], dim=1)
+    return (full, trace) if return_trace else full
 
 
 def verify_against_generate(user_message="Explain what a KV cache is in one sentence."):
