@@ -22,11 +22,13 @@ except ModuleNotFoundError:
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
-def load_model(attn_implementation=None):
+def load_model(attn_implementation=None, dtype=torch.float16):
     """Load the tokenizer (words <-> numbers) and the model (the brain) on GPU.
 
     attn_implementation="eager" is required for policies that read attention
-    scores (like H2O); the default (faster) mode doesn't expose them.
+    scores (like H2O); the default (faster) mode doesn't expose them. Note:
+    eager attention is numerically unstable in float16 (it can overflow to NaN),
+    so pass dtype=torch.float32 whenever you use eager.
     """
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     kwargs = {}
@@ -34,7 +36,7 @@ def load_model(attn_implementation=None):
         kwargs["attn_implementation"] = attn_implementation
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        dtype=torch.float16,
+        dtype=dtype,
         device_map="cuda",
         **kwargs,
     )

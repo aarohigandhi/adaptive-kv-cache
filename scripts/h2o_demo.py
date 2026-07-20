@@ -13,6 +13,8 @@ Run in Colab (with a GPU), from the repo root:
 import os
 import sys
 
+import torch
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from akvc.model import load_model, build_inputs, decode_with_policy  # noqa: E402
@@ -29,8 +31,9 @@ def snippet(tokenizer, ids, n_prompt, chars=220):
 
 
 def main():
-    # eager attention is required for H2O to see attention scores
-    tokenizer, model = load_model(attn_implementation="eager")
+    # eager attention is required for H2O to see attention scores; use float32
+    # because eager attention overflows to NaN in float16.
+    tokenizer, model = load_model(attn_implementation="eager", dtype=torch.float32)
     inputs = build_inputs(tokenizer, PROMPT)
     n_prompt = inputs["input_ids"].shape[1]
 
