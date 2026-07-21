@@ -18,6 +18,11 @@ class Policy:
 
     name = "policy"
 
+    # Smart policies (e.g. H2O) need the model's attention scores; simple ones
+    # (full, StreamingLLM) don't. The decode loop checks this flag to decide
+    # whether to collect attention (which is slower) during generation.
+    needs_attention = False
+
     def keep_indices(
         self,
         num_tokens: int,
