@@ -19,9 +19,21 @@ Keep three things within a fixed token budget:
 
 ## Headline result
 
-Needle-in-a-haystack: a code is hidden at varying depths in a long prompt, then requested, under a 96-token cache budget (so the middle *must* be evicted).
+Needle-in-a-haystack: a code is hidden at depth 0.1 / 0.5 / 0.9 in a long prompt, then requested. Retrieval accuracy (Qwen2.5-1.5B, 3 codes × 3 depths) vs cache budget:
 
-![Needle retrieval accuracy by policy](results/needle_accuracy.png)
+| cache budget | full | streaming_llm | h2o | snapkv | **adaptive (ours)** |
+|---:|:---:|:---:|:---:|:---:|:---:|
+| 48  | 100% | 0%  | 0%  | 0%   | 0%   |
+| 96  | 100% | 33% | 0%  | 0%   | 0%   |
+| 192 | 100% | 33% | 33% | 100% | **67%**  |
+| 288 | 100% | 67% | 33% | 100% | **100%** |
+
+![Needle retrieval accuracy vs cache budget](results/needle_accuracy.png)
+
+**Takeaways:**
+- **Among query-agnostic methods (streaming_llm, h2o, ours), ours wins** at budgets 192 and 288 — because it retains a chunked trace of the *middle*, where the others drop it.
+- **It reaches 100% at budget 288, matching query-aware SnapKV** — despite never reading the question.
+- **H2O is weakest on needles**, as expected: heavy-hitter policies evict the needle before it is ever attended to.
 
 _Regenerate from raw data: `python scripts/run_eval.py` → `results/eval_needle.json` + the chart above._
 
@@ -30,9 +42,9 @@ _Regenerate from raw data: `python scripts/run_eval.py` → `results/eval_needle
 - ✅ **Phase 0** — manual decode loop, verified token-for-token against `generate()`.
 - ✅ **Phase 1** — instrumentation (memory + latency) and the memory/latency-vs-context "before" plot.
 - ✅ **Phase 2** — three baselines (StreamingLLM, H2O, SnapKV) + a pluggable eviction interface.
-- ✅ **Phase 3** — the Anchored Skeleton method.
-- ✅ **Phase 4** — needle-retrieval evaluation across all policies.
-- 🚧 **Phase 5** — writeup + polish.
+- ✅ **Phase 3** — the Anchored Skeleton method (with a RoPE position fix + chunked skeleton).
+- ✅ **Phase 4** — needle-retrieval evaluation across all policies and cache budgets.
+- ✅ **Phase 5** — writeup with the headline result above.
 
 ## Layout
 
