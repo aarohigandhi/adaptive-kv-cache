@@ -25,9 +25,10 @@ from .base import Policy
 class AdaptivePolicy(Policy):
     name = "adaptive"
 
-    def __init__(self, sinks: int = 4, recent_frac: float = 0.5):
+    def __init__(self, sinks: int = 4, recent_frac: float = 0.5, chunk_size: int = 8):
         self.sinks = sinks              # number of anchor tokens to always keep
         self.recent_frac = recent_frac  # fraction of the leftover budget for recency
+        self.chunk_size = chunk_size    # skeleton is kept as contiguous chunks this big
 
     def keep_indices(
         self,
@@ -46,13 +47,20 @@ class AdaptivePolicy(Policy):
         anchor_pos = list(range(sinks))
         recent_pos = list(range(num_tokens - recent, num_tokens))
 
-        # Strided skeleton across the middle [sinks, num_tokens - recent).
+        # Skeleton across the middle [sinks, num_tokens - recent): a handful of
+        # evenly-spaced CHUNKS of contiguous tokens, so kept phrases stay readable.
         mid_start, mid_end = sinks, num_tokens - recent
         mid_len = mid_end - mid_start
         skeleton_pos: List[int] = []
         if skeleton_budget > 0 and mid_len > 0:
-            stride = max(1, mid_len // skeleton_budget)
-            skeleton_pos = list(range(mid_start, mid_end, stride))[:skeleton_budget]
+            chunk = min(self.chunk_size, skeleton_budget)
+            n_chunks = max(1, skeleton_budget // chunk)
+            for i in range(n_chunks):
+                # center each chunk in its evenly-spaced slice of the middle
+                center = int(mid_start + (i + 0.5) * mid_len / n_chunks)
+                start = max(mid_start, min(center - chunk // 2, mid_end - chunk))
+                skeleton_pos.extend(range(start, min(start + chunk, mid_end)))
+            skeleton_pos = sorted(set(skeleton_pos))[:skeleton_budget]
 
         return sorted(set(anchor_pos + skeleton_pos + recent_pos))
 
