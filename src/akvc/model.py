@@ -150,6 +150,12 @@ def decode_with_policy(
     generated = [next_token]
     trace = [cache_length(past)]
 
+    # The next token's TRUE absolute position. This must NOT shrink when we evict:
+    # the kept keys keep their original positions, so the new query needs its real
+    # position for RoPE distances to stay correct. (Without this, eviction scrambles
+    # attention and the output degrades into repetition.)
+    abs_pos = cache_length(past)
+
     for _ in range(max_new_tokens - 1):
         # 1) ask the policy what to keep, and evict the rest (from cache + tally)
         n = cache_length(past)
@@ -164,16 +170,19 @@ def decode_with_policy(
         # 2) attention mask must match the (possibly trimmed) cache + the new token
         n = cache_length(past)
         attn = torch.ones((1, n + 1), dtype=torch.long, device=input_ids.device)
+        position_ids = torch.tensor([[abs_pos]], dtype=torch.long, device=input_ids.device)
 
-        # 3) one decode step
+        # 3) one decode step (with the true position, not the shrunk-cache position)
         out = model(
             input_ids=next_token,
             attention_mask=attn,
             past_key_values=past,
+            position_ids=position_ids,
             use_cache=True,
             output_attentions=needs_attn,
         )
         past = out.past_key_values
+        abs_pos += 1
         if needs_attn:
             importance = _update_importance(importance, out.attentions)
         next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)

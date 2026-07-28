@@ -50,12 +50,15 @@ def _run_snapkv(model, tokenizer, inputs, budget, window, max_new_tokens):
 
     next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
     generated = [next_token]
+    abs_pos = n_prompt  # true position of the first generated token (kept keys keep theirs)
     for _ in range(max_new_tokens - 1):
         n = cache_length(past)
         attn = torch.ones((1, n + 1), dtype=torch.long, device=device)
-        out = model(input_ids=next_token, attention_mask=attn,
-                    past_key_values=past, use_cache=True)
+        position_ids = torch.tensor([[abs_pos]], dtype=torch.long, device=device)
+        out = model(input_ids=next_token, attention_mask=attn, past_key_values=past,
+                    position_ids=position_ids, use_cache=True)
         past = out.past_key_values
+        abs_pos += 1
         next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
         generated.append(next_token)
         if next_token.item() == tokenizer.eos_token_id:
