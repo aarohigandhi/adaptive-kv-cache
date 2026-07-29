@@ -20,10 +20,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from akvc.model import load_model                          # noqa: E402
 from akvc.eval.harness import run_policy, POLICIES         # noqa: E402
-from akvc.eval.needle import make_prompt, found, NEEDLES   # noqa: E402
+from akvc.eval.needle import make_prompt, found, NEEDLES, DEPTHS  # noqa: E402
 
-BUDGETS = [48, 96, 192, 288]
-DEPTHS = [0.1, 0.5, 0.9]
+BUDGETS = [48, 96, 192, 288]  # DEPTHS imported from needle.py so tuning + eval match
 
 # fixed colors per policy (our method highlighted); baselines muted-but-distinct
 COLORS = {

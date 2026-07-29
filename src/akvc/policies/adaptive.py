@@ -25,7 +25,10 @@ from .base import Policy
 class AdaptivePolicy(Policy):
     name = "adaptive"
 
-    def __init__(self, sinks: int = 4, recent_frac: float = 0.5, chunk_size: int = 8):
+    def __init__(self, sinks: int = 4, recent_frac: float = 0.25, chunk_size: int = 16):
+        # Defaults tuned on the needle task (scripts/tune_adaptive.py): more budget
+        # to the middle skeleton (recent_frac=0.25) in bigger chunks (16) retrieves
+        # mid-context facts best, since the needle lives in the middle.
         self.sinks = sinks              # number of anchor tokens to always keep
         self.recent_frac = recent_frac  # fraction of the leftover budget for recency
         self.chunk_size = chunk_size    # skeleton is kept as contiguous chunks this big
