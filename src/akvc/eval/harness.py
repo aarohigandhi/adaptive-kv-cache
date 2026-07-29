@@ -14,7 +14,7 @@ from akvc.cache_manager import cache_length, evict
 from akvc.policies.streaming_llm import StreamingLLMPolicy
 from akvc.policies.h2o import H2OPolicy
 from akvc.policies.snapkv import SnapKVPolicy
-from akvc.policies.adaptive import AdaptivePolicy
+from akvc.policies.adaptive import AdaptivePolicy, AdaptiveQAPolicy
 
 # Names in the fixed order we want them to appear in charts/tables.
 POLICIES = ["full", "streaming_llm", "h2o", "snapkv", "adaptive"]
@@ -25,6 +25,7 @@ def _make_policy(name):
         "streaming_llm": StreamingLLMPolicy(sinks=4),
         "h2o": H2OPolicy(),
         "adaptive": AdaptivePolicy(sinks=4),
+        "adaptive_qa": AdaptiveQAPolicy(sinks=4),
     }[name]
 
 

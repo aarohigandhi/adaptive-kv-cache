@@ -19,6 +19,8 @@ or score the skeleton by attention (that's the roadmap).
 
 from typing import List, Optional
 
+import torch
+
 from .base import Policy
 
 
@@ -66,6 +68,63 @@ class AdaptivePolicy(Policy):
             skeleton_pos = sorted(set(skeleton_pos))[:skeleton_budget]
 
         return sorted(set(anchor_pos + skeleton_pos + recent_pos))
+
+
+class AdaptiveQAPolicy(Policy):
+    """Query-aware variant: place the middle chunks where ATTENTION is highest,
+    not at even spacing. Keeps AdaptivePolicy's anchor + chunked-skeleton +
+    recent structure, but greedily grows chunks around the highest-importance
+    middle tokens -- so a fact the prompt actually cares about gets kept.
+
+    Needs attention scores (like H2O/SnapKV), so it runs on the eager path.
+    """
+
+    name = "adaptive_qa"
+    needs_attention = True
+
+    def __init__(self, sinks: int = 4, recent_frac: float = 0.25, chunk_size: int = 16):
+        self.sinks = sinks
+        self.recent_frac = recent_frac
+        self.chunk_size = chunk_size
+
+    def keep_indices(
+        self,
+        num_tokens: int,
+        budget: int,
+        stats: Optional[dict] = None,
+    ) -> List[int]:
+        if num_tokens <= budget:
+            return list(range(num_tokens))
+
+        importance = stats["importance"]  # one score per token position
+
+        sinks = min(self.sinks, budget)
+        remaining = budget - sinks
+        recent = int(remaining * self.recent_frac)
+        skeleton_budget = remaining - recent
+
+        anchor_pos = list(range(sinks))
+        recent_pos = list(range(num_tokens - recent, num_tokens))
+
+        mid_start, mid_end = sinks, num_tokens - recent
+        skeleton: set = set()
+        if skeleton_budget > 0 and mid_end > mid_start:
+            chunk = min(self.chunk_size, skeleton_budget)
+            mid_imp = importance[mid_start:mid_end]
+            # visit middle tokens from most- to least-attended, growing a chunk
+            # around each until the skeleton budget is spent
+            order = torch.argsort(mid_imp, descending=True).tolist()
+            for local in order:
+                if len(skeleton) >= skeleton_budget:
+                    break
+                center = mid_start + local
+                start = max(mid_start, min(center - chunk // 2, mid_end - chunk))
+                for p in range(start, min(start + chunk, mid_end)):
+                    if len(skeleton) >= skeleton_budget:
+                        break
+                    skeleton.add(p)
+
+        return sorted(set(anchor_pos) | skeleton | set(recent_pos))
 
 
 if __name__ == "__main__":
