@@ -1,9 +1,6 @@
-"""akvc — Adaptive KV Cache Compression.
+"""akvc: adaptive KV cache compression.
 
-Package layout:
-    model.py           model + tokenizer loading and our manual decode loop
-    cache_manager.py   owns the KV tensors; the evict()/stats() interface
-    instrumentation.py memory / latency / attention measurement
-    policies/          pluggable eviction policies (baselines + our method)
-    eval/              scoring harness (needle, LongBench, perplexity)
+model.py loads the model and runs the decode loops. cache_manager.py trims the
+cache. instrumentation.py measures memory and speed. policies/ holds the eviction
+rules (the baselines and our method). eval/ scores them on the needle task.
 """

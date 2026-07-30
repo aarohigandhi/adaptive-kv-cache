@@ -1,20 +1,8 @@
-"""Phase 2 -> 3 bridge: profile per-head attention entropy.
+"""Measure attention entropy per head. Low entropy means a head focuses on a few
+tokens, high entropy means it spreads its attention out. A big spread across heads
+is the case for giving different heads different budgets.
 
-The novel-method hypothesis is "different heads deserve different budgets." This
-script tests it: it runs the model over a real paragraph, then for every layer
-and head measures the ENTROPY of that head's attention at the last position.
-
-    low entropy  = focused head  (a few tokens carry the signal -> needs little cache)
-    high entropy = diffuse head  (attention spread out          -> needs more cache)
-
-If heads differ a lot, that's the evidence for an adaptive per-head budget.
-
-Outputs:
-    results/attention_entropy.json  raw [layers x heads] entropy grid
-    results/attention_entropy.png   heatmap of the grid
-
-Needs eager attention + float32. Run in Colab (GPU), from the repo root:
-    !python scripts/profile_attention.py
+    python scripts/profile_attention.py
 """
 
 import json
@@ -26,9 +14,8 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from akvc.model import load_model, build_inputs  # noqa: E402
+from akvc.model import load_model, build_inputs
 
-# A content-rich prompt so there's real context to attend to.
 PROMPT = (
     "The lighthouse keeper recorded the weather every morning: the wind speed, "
     "the tide height, the temperature, and the number of ships that passed. "
@@ -41,33 +28,24 @@ PROMPT = (
 
 @torch.no_grad()
 def entropy_grid(model, inputs):
-    """Return a [layers x heads] tensor of attention entropy at the last token."""
     out = model(**inputs, use_cache=False, output_attentions=True)
-    attentions = out.attentions  # tuple[layers] of [batch, heads, queries, keys]
-
-    # Sanity check that the attention machinery actually gave us numbers.
-    a0 = attentions[0]
-    print(f"Captured attention: {len(attentions)} layers, per-layer shape {tuple(a0.shape)}")
-
+    attentions = out.attentions
+    print(f"Captured attention: {len(attentions)} layers, shape {tuple(attentions[0].shape)}")
     rows = []
     for a in attentions:
-        last = a[0, :, -1, :].float()                       # [heads, keys]
-        ent = -(last * last.clamp_min(1e-9).log()).sum(-1)  # entropy per head
+        last = a[0, :, -1, :].float()
+        ent = -(last * last.clamp_min(1e-9).log()).sum(-1)
         rows.append(ent)
-    return torch.stack(rows)                                # [layers, heads]
+    return torch.stack(rows)
 
 
 def summarize(grid, n_keys):
     layers, heads = grid.shape
-    max_possible = math.log(n_keys)  # entropy if attention were perfectly uniform
-    print(f"\nGrid: {layers} layers x {heads} heads   (max possible entropy ~ {max_possible:.2f})")
-    print(f"Mean entropy:        {grid.mean():.2f}")
-    print(f"Most FOCUSED head:   entropy {grid.min():.2f} "
-          f"at layer {grid.argmin() // heads}, head {grid.argmin() % heads}")
-    print(f"Most DIFFUSE head:   entropy {grid.max():.2f} "
-          f"at layer {grid.argmax() // heads}, head {grid.argmax() % heads}")
-    print(f"Spread (max - min):  {grid.max() - grid.min():.2f}  "
-          f"<- big spread => heads really do want different budgets")
+    print(f"\nGrid: {layers} layers by {heads} heads (max entropy about {math.log(n_keys):.2f})")
+    print(f"Mean entropy:      {grid.mean():.2f}")
+    print(f"Most focused head: {grid.min():.2f} at layer {grid.argmin() // heads}, head {grid.argmin() % heads}")
+    print(f"Most diffuse head: {grid.max():.2f} at layer {grid.argmax() // heads}, head {grid.argmax() % heads}")
+    print(f"Spread:            {grid.max() - grid.min():.2f}")
 
 
 def plot(grid, out_path):
@@ -77,7 +55,7 @@ def plot(grid, out_path):
 
     fig, ax = plt.subplots(figsize=(7, 6))
     im = ax.imshow(grid.cpu().numpy(), aspect="auto", cmap="viridis")
-    ax.set_title("Attention entropy per head\n(dark = focused, bright = diffuse)")
+    ax.set_title("Attention entropy per head\n(dark is focused, bright is diffuse)")
     ax.set_xlabel("head")
     ax.set_ylabel("layer")
     fig.colorbar(im, ax=ax, label="entropy (nats)")
@@ -89,11 +67,8 @@ def plot(grid, out_path):
 def main():
     tokenizer, model = load_model(attn_implementation="eager", dtype=torch.float32)
     inputs = build_inputs(tokenizer, PROMPT)
-    n_keys = inputs["input_ids"].shape[1]
-
     grid = entropy_grid(model, inputs)
-    summarize(grid, n_keys)
-
+    summarize(grid, inputs["input_ids"].shape[1])
     os.makedirs("results", exist_ok=True)
     with open("results/attention_entropy.json", "w") as f:
         json.dump(grid.cpu().tolist(), f)

@@ -1,12 +1,8 @@
-"""Phase 2: SnapKV one-shot prefill compression.
+"""SnapKV compressing the prompt once. It scores the prompt tokens from the
+observation window, keeps the top ones plus the window, and answers from the
+compressed cache.
 
-Reads a long prompt, uses the observation window's attention to pick which
-prompt tokens to keep, compresses the cache ONCE down to the budget, then
-generates an answer from the compressed cache. Prints how much was dropped and
-the answer, so you can see the model still responds sensibly.
-
-Needs eager attention + float32. Run in Colab (GPU), from the repo root:
-    !python scripts/snapkv_demo.py
+    python scripts/snapkv_demo.py
 """
 
 import os
@@ -16,9 +12,9 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from akvc.model import load_model, build_inputs        # noqa: E402
-from akvc.cache_manager import cache_length, evict      # noqa: E402
-from akvc.policies.snapkv import SnapKVPolicy            # noqa: E402
+from akvc.model import load_model, build_inputs
+from akvc.cache_manager import cache_length, evict
+from akvc.policies.snapkv import SnapKVPolicy
 
 PROMPT = (
     "Here is a short report. The lighthouse on Bell Rock was built in 1810. "
@@ -34,12 +30,9 @@ NEW_TOKENS = 100
 
 @torch.no_grad()
 def snapkv_importance(attentions, window):
-    """Per-token score from the observation window: how much the last `window`
-    query tokens attended to each earlier token, summed over heads and layers."""
     importance = None
-    for a in attentions:                        # a: [1, heads, queries, keys]
-        w = a[0, :, -window:, :].float()        # last `window` queries
-        score = w.sum(dim=0).sum(dim=0)         # sum over heads and window -> [keys]
+    for a in attentions:
+        score = a[0, :, -window:, :].float().sum(dim=0).sum(dim=0)
         importance = score if importance is None else importance + score
     return importance
 
@@ -51,38 +44,35 @@ def main():
     device = inputs["input_ids"].device
     n_prompt = inputs["input_ids"].shape[1]
 
-    # Prefill with attention so SnapKV can score the prompt tokens.
     out = model(**inputs, use_cache=True, output_attentions=True)
     past = out.past_key_values
 
     window = min(WINDOW, n_prompt)
     importance = snapkv_importance(out.attentions, window)
-
-    policy = SnapKVPolicy(window=WINDOW)
-    keep = policy.keep_indices(n_prompt, BUDGET, {"importance": importance})
-    print(f"Prompt: {n_prompt} tokens -> SnapKV kept {len(keep)} (budget {BUDGET}), "
-          f"dropped {n_prompt - len(keep)}.")
+    keep = SnapKVPolicy(window=WINDOW).keep_indices(n_prompt, BUDGET, {"importance": importance})
+    print(f"Prompt: {n_prompt} tokens, SnapKV kept {len(keep)} (budget {BUDGET}), dropped {n_prompt - len(keep)}.")
     if len(keep) < n_prompt:
         evict(past, keep)
 
-    # Generate the answer from the compressed cache (plain greedy, no more eviction).
     next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
     generated = [next_token]
+    abs_pos = n_prompt
     for _ in range(NEW_TOKENS - 1):
         n = cache_length(past)
         attn = torch.ones((1, n + 1), dtype=torch.long, device=device)
-        out = model(input_ids=next_token, attention_mask=attn,
-                    past_key_values=past, use_cache=True)
+        position_ids = torch.tensor([[abs_pos]], dtype=torch.long, device=device)
+        out = model(input_ids=next_token, attention_mask=attn, past_key_values=past,
+                    position_ids=position_ids, use_cache=True)
         past = out.past_key_values
+        abs_pos += 1
         next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
         generated.append(next_token)
         if next_token.item() == tokenizer.eos_token_id:
             break
 
-    answer = tokenizer.decode(torch.cat(generated, dim=1)[0], skip_special_tokens=True)
-    print("\nAnswer from the SnapKV-compressed cache:")
-    print(answer[:300])
-    print("\n(Correct answer is in there if it says 1810 and 35 metres.)")
+    text = tokenizer.decode(torch.cat(generated, dim=1)[0], skip_special_tokens=True)
+    print("\nAnswer from the compressed cache:")
+    print(text[:300])
 
 
 if __name__ == "__main__":

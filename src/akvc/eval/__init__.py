@@ -1,1 +1,1 @@
-"""Evaluation — how we score quality against memory and latency."""
+"""Evaluation: the needle task and the harness that runs every policy through it."""

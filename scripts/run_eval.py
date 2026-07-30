@@ -1,13 +1,7 @@
-"""Phase 4: headline evaluation — needle retrieval vs cache budget.
+"""Needle retrieval accuracy against cache budget, for every policy. Saves the raw
+records and the accuracy vs budget chart.
 
-For every policy and several cache budgets, we run the needle test across a few
-needles x depths and record retrieval accuracy. The result is an accuracy-vs-
-budget curve per policy: it shows exactly where each method breaks and recovers.
-
-Saved to results/eval_needle.json and results/needle_accuracy.png.
-
-All policies run on one eager/float32 model. Run in Colab (GPU), from repo root:
-    !python scripts/run_eval.py
+    python scripts/run_eval.py
 """
 
 import json
@@ -18,13 +12,11 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from akvc.model import load_model                          # noqa: E402
-from akvc.eval.harness import run_policy, POLICIES         # noqa: E402
-from akvc.eval.needle import make_prompt, found, NEEDLES, DEPTHS  # noqa: E402
+from akvc.model import load_model
+from akvc.eval.harness import run_policy, POLICIES
+from akvc.eval.needle import make_prompt, found, NEEDLES, DEPTHS
 
-BUDGETS = [48, 96, 192, 288]  # DEPTHS imported from needle.py so tuning + eval match
-
-# fixed colors per policy (our method highlighted); baselines muted-but-distinct
+BUDGETS = [48, 96, 192, 288]
 COLORS = {
     "full": "#9aa4b2", "streaming_llm": "#2a6fdb", "h2o": "#e8710a",
     "snapkv": "#2ca02c", "adaptive": "#d62728",
@@ -39,14 +31,12 @@ def run_sweep(model, tokenizer):
             hits = 0
             for needle in NEEDLES:
                 for depth in DEPTHS:
-                    prompt = make_prompt(needle, depth)
-                    ans = run_policy(model, tokenizer, prompt, policy, budget)
+                    ans = run_policy(model, tokenizer, make_prompt(needle, depth), policy, budget)
                     hit = found(ans, needle)
                     hits += hit
                     records.append({"policy": policy, "budget": budget,
                                     "needle": needle, "depth": depth, "found": hit})
-            acc = hits / (len(NEEDLES) * len(DEPTHS))
-            line.append(f"b{budget}={acc:.0%}")
+            line.append(f"b{budget}={hits / (len(NEEDLES) * len(DEPTHS)):.0%}")
         print("  ".join(line))
     return records
 
@@ -64,10 +54,8 @@ def plot(records, out_path):
     fig, ax = plt.subplots(figsize=(7.5, 4.6))
     for policy in POLICIES:
         ys = [accuracy(records, policy, b) * 100 for b in BUDGETS]
-        lw = 2.8 if policy == "adaptive" else 1.8
-        ax.plot(BUDGETS, ys, marker="o", linewidth=lw,
-                color=COLORS[policy], label=policy)
-
+        width = 2.8 if policy == "adaptive" else 1.8
+        ax.plot(BUDGETS, ys, marker="o", linewidth=width, color=COLORS[policy], label=policy)
     ax.set_title("Needle retrieval vs cache budget")
     ax.set_xlabel("cache budget (tokens kept)")
     ax.set_ylabel("retrieval accuracy (%)")
@@ -82,12 +70,9 @@ def plot(records, out_path):
 
 def main():
     tokenizer, model = load_model(attn_implementation="eager", dtype=torch.float32)
-    print(f"Needle sweep: {len(POLICIES)} policies x {len(BUDGETS)} budgets "
-          f"x {len(NEEDLES)} needles x {len(DEPTHS)} depths "
-          f"= {len(POLICIES)*len(BUDGETS)*len(NEEDLES)*len(DEPTHS)} runs\n")
-
+    total = len(POLICIES) * len(BUDGETS) * len(NEEDLES) * len(DEPTHS)
+    print(f"Needle sweep: {total} runs\n")
     records = run_sweep(model, tokenizer)
-
     os.makedirs("results", exist_ok=True)
     with open("results/eval_needle.json", "w") as f:
         json.dump(records, f, indent=2)

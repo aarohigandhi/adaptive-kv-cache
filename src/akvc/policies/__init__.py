@@ -1,5 +1,2 @@
-"""Eviction policies.
-
-Every policy (baselines and our method) implements the same interface from
-base.py, so comparisons are apples-to-apples by construction.
-"""
+"""Eviction policies. Each one implements the same keep_indices interface, so the
+harness can swap them and compare fairly."""

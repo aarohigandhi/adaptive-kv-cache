@@ -1,15 +1,6 @@
-"""Baseline: H2O — Heavy-Hitter Oracle (Zhang et al.).
-
-Keep the "heavy hitter" tokens that have accumulated the most attention over
-time, plus a window of recent tokens; evict the rest. Unlike StreamingLLM
-(which keeps tokens by *position*), H2O keeps tokens by *importance*.
-
-We use a simplified, single-budget variant: attention is aggregated across
-heads and layers into one importance score per token, and the same positions
-are evicted everywhere. (True H2O tracks heavy hitters per head.)
-"""
-
-from typing import List, Optional
+"""H2O (Zhang et al.): keep the tokens that have drawn the most attention so far
+(the heavy hitters) plus a recent window. Our version pools attention across heads
+and layers into one score per token rather than tracking each head separately."""
 
 import torch
 
@@ -18,37 +9,22 @@ from .base import Policy
 
 class H2OPolicy(Policy):
     name = "h2o"
-    needs_attention = True  # tells the decode loop to collect attention scores
+    needs_attention = True
 
-    def __init__(self, recent: Optional[int] = None):
-        # size of the always-keep recent window; defaults to half the budget
+    def __init__(self, recent=None):
         self.recent = recent
 
-    def keep_indices(
-        self,
-        num_tokens: int,
-        budget: int,
-        stats: Optional[dict] = None,
-    ) -> List[int]:
+    def keep_indices(self, num_tokens, budget, stats=None):
         if num_tokens <= budget:
             return list(range(num_tokens))
-
-        importance = stats["importance"]  # 1D tensor, one score per token position
-
+        importance = stats["importance"]
         recent = self.recent if self.recent is not None else budget // 2
         recent = min(recent, budget)
         heavy_budget = budget - recent
-
-        # Always keep the most recent `recent` tokens.
         recent_positions = list(range(num_tokens - recent, num_tokens))
-
-        # From the older tokens, keep the `heavy_budget` highest-attention ones.
-        older_count = num_tokens - recent
-        if heavy_budget > 0 and older_count > 0:
-            older_importance = importance[:older_count]
-            k = min(heavy_budget, older_count)
-            top = torch.topk(older_importance, k).indices.tolist()
-        else:
-            top = []
-
+        older = num_tokens - recent
+        top = []
+        if heavy_budget > 0 and older > 0:
+            k = min(heavy_budget, older)
+            top = torch.topk(importance[:older], k).indices.tolist()
         return sorted(set(recent_positions + top))

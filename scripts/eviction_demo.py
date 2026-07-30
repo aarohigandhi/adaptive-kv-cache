@@ -1,11 +1,8 @@
-"""Phase 2: watch a policy actually bound the cache during generation.
+"""Show a policy bounding the cache during generation. Generates the same text
+with the full cache and with StreamingLLM at a fixed budget, reports how big the
+cache got each way, and plots the two cache sizes over time.
 
-Generates the same continuation two ways -- full cache vs StreamingLLM with a
-fixed budget -- and reports how big the cache got each way, the peak memory, and
-a snippet of the text so you can eyeball that it's still coherent.
-
-Run in Colab (with a GPU), from the repo root:
-    !python scripts/eviction_demo.py
+    python scripts/eviction_demo.py
 """
 
 import os
@@ -13,14 +10,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from akvc.model import (                                            # noqa: E402
-    load_model,
-    build_inputs,
-    manual_decode,
-    decode_with_policy,
-)
-from akvc.instrumentation import reset_peak_memory, peak_memory_mb  # noqa: E402
-from akvc.policies.streaming_llm import StreamingLLMPolicy          # noqa: E402
+from akvc.model import load_model, build_inputs, manual_decode, decode_with_policy
+from akvc.instrumentation import reset_peak_memory, peak_memory_mb
+from akvc.policies.streaming_llm import StreamingLLMPolicy
 
 PROMPT = "Tell me a long, detailed story about a lighthouse keeper and the sea."
 NEW_TOKENS = 300
@@ -32,14 +24,12 @@ def snippet(tokenizer, ids, n_prompt, chars=220):
 
 
 def plot_cache_sizes(n_prompt, streaming_trace, out_path):
-    """Draw cache size vs decode step: full cache climbs, StreamingLLM stays flat."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     steps = list(range(len(streaming_trace)))
-    full_trace = [n_prompt + s for s in steps]  # full cache = prompt + tokens so far
-
+    full_trace = [n_prompt + s for s in steps]
     fig, ax = plt.subplots(figsize=(7, 4.2))
     ax.plot(steps, full_trace, linewidth=2, color="#2a6fdb", label="full cache")
     ax.plot(steps, streaming_trace, linewidth=2, color="#e8710a", label="StreamingLLM")
@@ -49,7 +39,6 @@ def plot_cache_sizes(n_prompt, streaming_trace, out_path):
     ax.grid(True, alpha=0.25)
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(frameon=False)
-
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
     print("Saved", out_path)
@@ -60,18 +49,15 @@ def main():
     inputs = build_inputs(tokenizer, PROMPT)
     n_prompt = inputs["input_ids"].shape[1]
 
-    # --- Full cache (keep everything) ---
     reset_peak_memory()
     full_ids = manual_decode(model, tokenizer, inputs, max_new_tokens=NEW_TOKENS)
     full_mem = peak_memory_mb()
-    full_len = full_ids.shape[1]  # prompt + generated = final cache size
+    full_len = full_ids.shape[1]
 
-    # --- StreamingLLM (bounded budget) ---
     reset_peak_memory()
-    policy = StreamingLLMPolicy(sinks=4)
     sllm_ids, trace = decode_with_policy(
-        model, tokenizer, inputs, policy, budget=BUDGET,
-        max_new_tokens=NEW_TOKENS, return_trace=True,
+        model, tokenizer, inputs, StreamingLLMPolicy(sinks=4),
+        budget=BUDGET, max_new_tokens=NEW_TOKENS, return_trace=True,
     )
     sllm_mem = peak_memory_mb()
 
@@ -79,11 +65,11 @@ def main():
     print("                 final cache size   peak GPU memory")
     print(f"  full cache:        {full_len:>5} tokens        {full_mem:6.1f} MB")
     print(f"  StreamingLLM:      {max(trace):>5} tokens        {sllm_mem:6.1f} MB   (budget {BUDGET})")
-    print(f"\n  -> full cache grew to {full_len}; StreamingLLM stayed capped at {max(trace)}.")
+    print(f"\n  full cache grew to {full_len}; StreamingLLM stayed capped at {max(trace)}.")
 
-    print("\n--- Full-cache text ---")
+    print("\nFull cache text:")
     print(snippet(tokenizer, full_ids, n_prompt))
-    print("\n--- StreamingLLM text (should still read coherently) ---")
+    print("\nStreamingLLM text:")
     print(snippet(tokenizer, sllm_ids, n_prompt))
 
     os.makedirs("results", exist_ok=True)

@@ -1,11 +1,4 @@
-# Core (installed in Colab already, pinned here for a reproducible clone)
 torch
 transformers
 accelerate
-
-# Data + eval
-datasets          # LongBench / PG19 loading
-numpy
-
-# Plots + results
 matplotlib
