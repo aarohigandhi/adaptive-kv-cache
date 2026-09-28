@@ -1,4 +1,22 @@
-torch
-transformers
-accelerate
-matplotlib
+# Pinned to the versions the committed results were produced and the tests pass on.
+# A loose list here means a clone in six months reproduces nothing, which defeats
+# the point of keeping the raw JSON.
+#
+# On CPU, or on Colab where torch is preinstalled, this is all you need:
+#   pip install -r requirements.txt
+# For a specific CUDA build, install torch from the PyTorch index first and then
+# run the above, which will leave your torch alone:
+#   pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cu124
+
+torch==2.14.0
+transformers==5.17.0
+accelerate==1.15.0
+matplotlib==3.11.2
+numpy==2.5.3
+
+# Fetches the LongBench archive and the PG19 file list in scripts/run_phase4.py.
+# Comes with transformers anyway; pinned here because the eval imports it directly.
+# Note there is no datasets dependency: LongBench and PG19 both ship as loading
+# scripts, which datasets 5 no longer runs, so both are read from their published
+# files instead.
+huggingface_hub==1.33.0

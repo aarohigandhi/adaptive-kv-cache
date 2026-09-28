@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # CPU torch, because the runner has no GPU. The tests build a tiny Qwen2 from
+      # config rather than downloading the 1.5B model, so CI needs no network beyond
+      # these installs and no weights.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers==5.17.0 accelerate==1.15.0 matplotlib==3.11.2 numpy==2.5.3 huggingface_hub==1.33.0
+          pip install -r requirements-dev.txt
+
+      - name: Every module imports
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, 'src')
+          import akvc, akvc.model, akvc.cache_manager, akvc.instrumentation
+          import akvc.eval.harness, akvc.eval.needle, akvc.eval.metrics
+          import akvc.eval.longbench, akvc.eval.perplexity, akvc.eval.phase4
+          from akvc.eval.harness import POLICIES, make_policy
+          for p in POLICIES: make_policy(p)
+          print('imported and built every policy in', POLICIES)
+          "
+
+      - name: Every script parses
+        run: python -m compileall -q scripts phase0_bringup.py src
+
+      - name: Tests
+        run: pytest tests/ -q
