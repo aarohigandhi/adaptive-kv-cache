@@ -41,9 +41,6 @@ def timer():
         result["seconds"] = time.perf_counter() - start
 
 
-# Old name, kept so existing scripts keep working.
-cuda_timer = timer
-
 
 def kv_cache_bytes(past):
     """Bytes held by the KV cache itself, which is what a policy actually shrinks.

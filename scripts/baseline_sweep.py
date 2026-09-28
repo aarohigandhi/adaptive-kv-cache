@@ -13,7 +13,7 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from akvc.model import load_model
-from akvc.instrumentation import reset_peak_memory, peak_memory_mb, cuda_timer
+from akvc.instrumentation import reset_peak_memory, peak_memory_mb, timer
 
 CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192]
 DECODE_STEPS = 16
@@ -22,16 +22,16 @@ DECODE_STEPS = 16
 @torch.no_grad()
 def measure(model, n_tokens):
     vocab = model.config.vocab_size
-    input_ids = torch.randint(0, vocab, (1, n_tokens), device="cuda")
+    input_ids = torch.randint(0, vocab, (1, n_tokens), device=model.device)
     attn = torch.ones_like(input_ids)
 
     reset_peak_memory()
-    with cuda_timer() as t_prefill:
+    with timer() as t_prefill:
         out = model(input_ids=input_ids, attention_mask=attn, use_cache=True)
     past = out.past_key_values
     next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
 
-    with cuda_timer() as t_decode:
+    with timer() as t_decode:
         for _ in range(DECODE_STEPS):
             attn = torch.cat([attn, torch.ones_like(next_token)], dim=1)
             out = model(input_ids=next_token, attention_mask=attn, past_key_values=past, use_cache=True)

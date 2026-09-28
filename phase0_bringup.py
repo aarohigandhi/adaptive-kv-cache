@@ -14,14 +14,16 @@ MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 def load_model():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.float16, device_map="cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=dtype).to(device)
     return tokenizer, model
 
 
-def build_inputs(tokenizer, user_message):
+def build_inputs(tokenizer, user_message, device):
     messages = [{"role": "user", "content": user_message}]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-    return tokenizer(text, return_tensors="pt").to("cuda")
+    return tokenizer(text, return_tensors="pt").to(device)
 
 
 def generate_reply(tokenizer, model, inputs, max_new_tokens=40):
@@ -57,7 +59,7 @@ def peek_at_cache(model, inputs):
 
 if __name__ == "__main__":
     tokenizer, model = load_model()
-    inputs = build_inputs(tokenizer, "Say hello in exactly five words.")
+    inputs = build_inputs(tokenizer, "Say hello in exactly five words.", model.device)
     print("Library reply:")
     print(generate_reply(tokenizer, model, inputs))
     print("\nKV cache:")

@@ -141,6 +141,3 @@ def run_policy(model, tokenizer, prompt, policy_name, budget=None, ratio=None,
 
     return tokenizer.decode(ids[0, n_prompt:], skip_special_tokens=True).strip()
 
-
-# Old private name, kept so anything importing it keeps working.
-_make_policy = make_policy
