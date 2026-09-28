@@ -31,6 +31,23 @@ LATENCY_TOLERANCE = 1.05
 TARGET_RATIO = 0.25
 
 
+def done_keys(records):
+    """The (task, policy, ratio) combinations a record file already covers."""
+    return {(r["task"], r["policy"], r["ratio"]) for r in records}
+
+
+def _pending(task, policy, ratios, done):
+    """Ratios still to run for this task and policy, after the full cache shortcut
+    and after anything a resumed run already has."""
+    wanted = _ratios_to_run(policy, ratios)
+    if not done:
+        return wanted
+    # The full baseline is stored at every ratio, so if any is present it is done.
+    if policy == "full" and any((task, policy, r) in done for r in ratios):
+        return []
+    return [r for r in wanted if (task, policy, r) not in done]
+
+
 def _ratios_to_run(policy, ratios):
     """The full cache baseline ignores the budget, so it is measured once and the
     record copied to the other ratios. On gov_report that is two thirds of the
@@ -50,13 +67,18 @@ def _fan_out(records, ratios):
     return out
 
 
-def run_needle(model, tokenizer, policies, ratios, n_filler, max_new_tokens=16, log=print):
+def run_needle(model, tokenizer, policies, ratios, n_filler, max_new_tokens=16,
+               log=print, done=None, on_progress=None):
     """Needle retrieval at each keep ratio. One record per policy, ratio, needle, depth."""
     records = []
     for policy in policies:
+        pending = _pending("needle", policy, ratios, done)
+        if not pending:
+            log(f"  needle {policy:>14}:  already done, skipping")
+            continue
         line = [f"  needle {policy:>14}:"]
         mine = []
-        for ratio in _ratios_to_run(policy, ratios):
+        for ratio in pending:
             hits, runs = 0, 0
             for needle in NEEDLES:
                 for depth in DEPTHS:
@@ -73,23 +95,32 @@ def run_needle(model, tokenizer, policies, ratios, n_filler, max_new_tokens=16, 
             line.append(f"r{ratio}={hits / max(1, runs):.0%}")
         records += _fan_out(mine, ratios) if policy == "full" else mine
         log("  ".join(line))
+        if on_progress:
+            on_progress(records)
     return records
 
 
 def run_longbench(model, tokenizer, policies, ratios, tasks, n_samples,
-                  max_context_tokens, log=print):
+                  max_context_tokens, log=print, done=None, on_progress=None):
     """The LongBench subsets. Samples are drawn once per task so every policy sees
     the same documents."""
     records = []
     for task in tasks:
+        if all(not _pending(task, p, ratios, done) for p in policies):
+            log(f"  {task}: already done, skipping")
+            continue
         samples = longbench.load_samples(task, n_samples)
         spec = longbench.TASKS[task]
         prompts = [longbench.make_prompt(tokenizer, task, s, max_context_tokens)
                    for s in samples]
         for policy in policies:
+            pending = _pending(task, policy, ratios, done)
+            if not pending:
+                log(f"  {task} {policy:>14}:  already done, skipping")
+                continue
             line = [f"  {task} {policy:>14}:"]
             mine = []
-            for ratio in _ratios_to_run(policy, ratios):
+            for ratio in pending:
                 scores = []
                 for prompt, sample in zip(prompts, samples):
                     metrics = {}
@@ -104,18 +135,28 @@ def run_longbench(model, tokenizer, policies, ratios, tasks, n_samples,
                 line.append(f"r{ratio}={mean:.3f}")
             records += _fan_out(mine, ratios) if policy == "full" else mine
             log("  ".join(line))
+            if on_progress:
+                on_progress(records)
     return records
 
 
-def run_pg19(model, tokenizer, policies, ratios, n_passages, n_tokens, n_prefill, log=print):
+def run_pg19(model, tokenizer, policies, ratios, n_passages, n_tokens, n_prefill,
+             log=print, done=None, on_progress=None):
     """Perplexity on PG19 passages, teacher forced with the policy evicting each step."""
+    if all(not _pending("pg19", p, ratios, done) for p in policies):
+        log("  pg19: already done, skipping")
+        return []
     passages = load_passages(tokenizer, n_passages, n_tokens)
     records = []
     for policy_name in policies:
+        pending = _pending("pg19", policy_name, ratios, done)
+        if not pending:
+            log(f"  pg19 {policy_name:>14}:  already done, skipping")
+            continue
         policy = None if policy_name == "full" else make_policy(policy_name)
         line = [f"  pg19 {policy_name:>14}:"]
         mine = []
-        for ratio in _ratios_to_run(policy_name, ratios):
+        for ratio in pending:
             budget = budget_for(n_prefill, ratio)
             nll, count = 0.0, 0
             for ids in passages:
@@ -131,6 +172,8 @@ def run_pg19(model, tokenizer, policies, ratios, n_passages, n_tokens, n_prefill
             line.append(f"r{ratio}={perplexity(nll, count):.2f}")
         records += _fan_out(mine, ratios) if policy_name == "full" else mine
         log("  ".join(line))
+        if on_progress:
+            on_progress(records)
     return records
 
 

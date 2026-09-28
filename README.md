@@ -99,7 +99,9 @@ python scripts/tune_adaptive.py      # the sweep that picked our defaults
 
 `run_eval.py` writes `results/eval_needle.json` and the chart above.
 `run_phase4.py` writes `results/phase4.json`; everything after that regenerates from
-it without a GPU, so the tables and the verdict are never typed in by hand.
+it without a GPU, so the tables and the verdict are never typed in by hand. It saves
+after every policy and `--resume` picks up where it stopped, because the full grid is
+hours on a free tier GPU and hosted notebooks disconnect.
 
 The two needle scripts answer different questions and both are kept. `run_eval.py`
 sweeps absolute token budgets, which shows where each policy breaks. `run_phase4.py`
@@ -123,5 +125,7 @@ that ever fails, every number in this repo is measuring a bug instead of a polic
 * One small model, so the numbers may not carry over to larger ones.
 * The needle sweep uses a handful of codes and depths. It shows the effect but is not a full statistical study.
 * H2O and SnapKV use a simplified single budget version that pools attention across heads, not the per head original.
+* Reading attention scores is what makes this expensive. `output_attentions` hands back one (heads, queries, keys) tensor per layer at once, about 22 GB at a 4K prompt on this model, which does not fit on the GPU the project targets. Prefill therefore runs a chunk of queries at a time and folds each into a running tally, roughly 1.4 GB at the default chunk. `tests/test_chunked_prefill.py` checks that this changes the memory and not the numbers.
+* Everything runs in float32. Eager attention is needed to read attention scores at all, and eager attention overflows to NaN in float16, so every policy is measured in float32 for fairness even though the ones that ignore attention would not need it.
 * Compression barely moves peak memory, and the repo measures both numbers rather than the flattering one. Prefill builds the whole cache before any policy gets to evict, so the high water mark for a run is roughly the prompt either way. What a policy collapses is the cache held during decode, which is what matters for long generations and what the cost tables report.
 * The needle table above was produced at 3 depths. `needle.py` now sweeps 5, so rerunning widens it rather than reproducing it exactly.

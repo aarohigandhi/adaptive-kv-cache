@@ -17,6 +17,7 @@ import torch
 
 from akvc.cache_manager import cache_length, evict
 from akvc.instrumentation import timer, kv_cache_bytes
+from akvc.model import chunked_prefill
 
 DATASET = "deepmind/pg19"          # the Hub repo, for the test split file list
 BUCKET = "https://storage.googleapis.com/deepmind-gutenberg"  # where the books live
@@ -74,15 +75,11 @@ def passage_nll(model, ids, policy, budget, n_prefill, metrics=None,
     input_ids = torch.tensor([ids[:n_prefill]], dtype=torch.long, device=device)
 
     with timer() as t_prefill:
-        out = model(input_ids=input_ids, use_cache=True, output_attentions=needs_attn)
-    past = out.past_key_values
-    if needs_attn and compress_once:
-        importance = _window_importance(out.attentions, observation_window)
-    elif needs_attn:
-        importance = _prefill_importance(out.attentions)
-    else:
-        importance = None
-    logits = out.logits[:, -1, :]
+        past, all_logits, prefill_importance, window_importance = chunked_prefill(
+            model, input_ids, need_importance=needs_attn,
+            observation_window=observation_window if compress_once else None)
+    importance = window_importance if compress_once else prefill_importance
+    logits = all_logits[:, -1, :]
 
     # Read before any compression, so every policy is charged for the prefill it
     # really built.
@@ -143,24 +140,6 @@ def passage_nll(model, ids, policy, budget, n_prefill, metrics=None,
 
 def perplexity(total_nll, n_tokens):
     return math.exp(total_nll / n_tokens) if n_tokens else float("nan")
-
-
-def _window_importance(attentions, window):
-    """SnapKV's score: attention from the last few prompt tokens to everything."""
-    importance = None
-    for a in attentions:
-        w = min(window, a.shape[2])
-        score = a[0, :, -w:, :].float().sum(dim=0).sum(dim=0)
-        importance = score if importance is None else importance + score
-    return importance
-
-
-def _prefill_importance(attentions):
-    importance = None
-    for a in attentions:
-        score = a[0].sum(dim=0).sum(dim=0).float()
-        importance = score if importance is None else importance + score
-    return importance
 
 
 def _step_importance(importance, attentions):

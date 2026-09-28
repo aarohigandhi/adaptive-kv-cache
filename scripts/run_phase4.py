@@ -8,10 +8,15 @@ needs the GPU: scripts/report_phase4.py regenerates all of it from the JSON.
     python scripts/run_phase4.py                      # everything, the defaults below
     python scripts/run_phase4.py --tasks needle       # just the needle sweep
     python scripts/run_phase4.py --samples 5 --max-context 2048    # a cheap dry run
+    python scripts/run_phase4.py --resume             # carry on from a saved file
 
-The LongBench and PG19 tasks need the datasets package and a network connection the
-first time. Start with --tasks needle if you only have a free tier GPU; the rest is
-where the real compute goes.
+Results are written after every policy finishes, and --resume skips any task, policy
+and ratio already in the file. A hosted notebook that disconnects three hours in
+costs you the current policy and nothing else.
+
+The LongBench and PG19 tasks download their data the first time. Start with
+--tasks needle if you only have a free tier GPU; the LongBench subsets are where the
+compute actually goes, gov_report most of all, since it generates 128 tokens a sample.
 """
 
 import argparse
@@ -40,10 +45,15 @@ def parse_args():
     p.add_argument("--max-context", type=int, default=4096,
                    help="truncate LongBench contexts to this many tokens")
     p.add_argument("--needle-filler", type=int, default=64,
-                   help="filler repeats in the needle prompt, about 30 tokens each")
+                   help="filler repeats in the needle prompt, about 25 tokens each")
     p.add_argument("--pg19-passages", type=int, default=3)
     p.add_argument("--pg19-prefill", type=int, default=2048)
     p.add_argument("--pg19-eval-tokens", type=int, default=512)
+    p.add_argument("--prefill-chunk", type=int, default=None,
+                   help="queries per prefill chunk when reading attention. Lower it "
+                        "if prefill runs out of memory, raise it if you have room.")
+    p.add_argument("--resume", action="store_true",
+                   help="keep what is already in --out and only run what is missing")
     p.add_argument("--out", default="results/phase4.json")
     return p.parse_args()
 
@@ -58,28 +68,47 @@ def main():
     if unknown:
         raise SystemExit(f"Unknown tasks: {sorted(unknown)}. Choose from {ALL_TASKS}.")
 
+    if args.prefill_chunk:
+        import akvc.model
+        akvc.model.PREFILL_CHUNK = args.prefill_chunk
+
+    records = []
+    if args.resume and os.path.exists(args.out):
+        records = phase4.load(args.out)
+        print(f"Resuming from {args.out}: {len(records)} records already there")
+    done = phase4.done_keys(records)
+
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+
+    def checkpoint(new_records):
+        """Save everything so far. Called after each policy finishes."""
+        phase4.save(records + new_records, args.out)
+
     tokenizer, model = load_model(attn_implementation="eager")
     print(f"Device {model.device}, dtype {model.dtype}")
     print(f"Tasks {tasks} | policies {policies} | ratios {ratios}\n")
 
-    records = []
     if "needle" in tasks:
         records += phase4.run_needle(model, tokenizer, policies, ratios,
-                                     n_filler=args.needle_filler)
+                                     n_filler=args.needle_filler,
+                                     done=done, on_progress=checkpoint)
+        phase4.save(records, args.out)
 
     lb = [t for t in tasks if t in phase4.QUALITY_TASKS]
     if lb:
         records += phase4.run_longbench(model, tokenizer, policies, ratios, lb,
                                         n_samples=args.samples,
-                                        max_context_tokens=args.max_context)
+                                        max_context_tokens=args.max_context,
+                                        done=done, on_progress=checkpoint)
+        phase4.save(records, args.out)
 
     if "pg19" in tasks:
         records += phase4.run_pg19(model, tokenizer, policies, ratios,
                                    n_passages=args.pg19_passages,
                                    n_tokens=args.pg19_prefill + args.pg19_eval_tokens,
-                                   n_prefill=args.pg19_prefill)
+                                   n_prefill=args.pg19_prefill,
+                                   done=done, on_progress=checkpoint)
 
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     phase4.save(records, args.out)
     print(f"\nSaved {args.out} ({len(records)} records)")
 

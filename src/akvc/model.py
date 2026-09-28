@@ -22,6 +22,9 @@ except ModuleNotFoundError:
 
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
+# Queries per prefill chunk when attention scores are needed. See chunked_prefill.
+PREFILL_CHUNK = 256
+
 
 def pick_device():
     return "cuda" if torch.cuda.is_available() else "cpu"
@@ -129,6 +132,74 @@ def _init_importance(attentions):
     return importance
 
 
+def _add_importance(importance, attentions):
+    """Fold one chunk's attention into a running per token tally, growing it as the
+    context does."""
+    chunk = _init_importance(attentions)
+    if importance is None:
+        return chunk
+    pad = chunk.shape[0] - importance.shape[0]
+    if pad > 0:
+        importance = torch.cat([importance, torch.zeros(pad, device=importance.device,
+                                                        dtype=importance.dtype)])
+    return importance + chunk
+
+
+@torch.no_grad()
+def chunked_prefill(model, input_ids, attention_mask=None, chunk_size=None,
+                    need_importance=False, observation_window=None):
+    """Prefill the prompt a chunk at a time, returning (past, logits, importance,
+    window_importance).
+
+    Reading attention scores means asking for output_attentions, and that returns a
+    tensor of shape (heads, queries, keys) for every layer at once. For this model at
+    a 4K prompt that is about 22 GB, which does not fit on the GPU this project is
+    meant to run on. Prefilling in chunks holds one chunk of queries at a time and
+    folds each into a running tally, which costs about 1.4 GB at a 256 token chunk
+    and gives the identical result: every query still attends to every earlier key,
+    and summing over queries does not care what order they arrive in.
+
+    observation_window is SnapKV's: it needs the attention from only the last few
+    prompt tokens, so the prompt is split to put exactly those in the final chunk.
+
+    With need_importance False this is a plain prefill and runs in one pass.
+    """
+    device = input_ids.device
+    n = input_ids.shape[1]
+    chunk_size = chunk_size or PREFILL_CHUNK
+
+    if not need_importance:
+        mask = attention_mask if attention_mask is not None else torch.ones(
+            (1, n), dtype=torch.long, device=device)
+        out = model(input_ids=input_ids, attention_mask=mask, use_cache=True)
+        return out.past_key_values, out.logits, None, None
+
+    bounds = []
+    tail = min(observation_window, n) if observation_window else 0
+    head_end = n - tail
+    start = 0
+    while start < head_end:
+        bounds.append((start, min(start + chunk_size, head_end)))
+        start += chunk_size
+    if tail:
+        bounds.append((head_end, n))
+
+    past, logits, importance, window_importance = None, None, None, None
+    for start, end in bounds:
+        piece = input_ids[:, start:end]
+        mask = torch.ones((1, end), dtype=torch.long, device=device)
+        out = model(input_ids=piece, attention_mask=mask, past_key_values=past,
+                    use_cache=True, output_attentions=True)
+        past = out.past_key_values
+        logits = out.logits
+        importance = _add_importance(importance, out.attentions)
+        if tail and (start, end) == bounds[-1]:
+            window_importance = _init_importance(out.attentions)
+        del out
+
+    return past, logits, importance, window_importance
+
+
 def _update_importance(importance, attentions):
     """Add the newest token's attention over the cached keys, growing the tally by one slot."""
     n_keys = attentions[0].shape[-1]
@@ -156,11 +227,9 @@ def decode_with_policy(model, tokenizer, inputs, policy, budget,
     attn = inputs["attention_mask"]
 
     with timer() as t_prefill:
-        out = model(input_ids=input_ids, attention_mask=attn,
-                    use_cache=True, output_attentions=needs_attn)
-    past = out.past_key_values
-    importance = _init_importance(out.attentions) if needs_attn else None
-    next_token = _greedy(out.logits)
+        past, logits, importance, _ = chunked_prefill(
+            model, input_ids, attention_mask=attn, need_importance=needs_attn)
+    next_token = _greedy(logits)
     generated = [next_token]
     trace = [cache_length(past)]
     abs_pos = cache_length(past)

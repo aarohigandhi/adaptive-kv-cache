@@ -93,3 +93,26 @@ def test_pg19_aggregates_as_perplexity_not_as_a_mean():
     ]
     # exp(300 / 200) = exp(1.5)
     assert phase4.mean_score(records, "pg19", "adaptive", 0.25) == pytest.approx(4.4816891)
+
+
+def test_done_keys_and_pending_drive_resume():
+    """A resumed run must skip what it already has and run what it does not."""
+    records = _records({"qasper": 0.6}, {"qasper": 0.5})
+    done = phase4.done_keys(records)
+    assert done == {("qasper", "adaptive", 0.25), ("qasper", "snapkv", 0.25)}
+
+    ratios = [0.5, 0.25, 0.125]
+    assert phase4._pending("qasper", "adaptive", ratios, done) == [0.5, 0.125]
+    assert phase4._pending("hotpotqa", "adaptive", ratios, done) == ratios
+    assert phase4._pending("qasper", "adaptive", ratios, None) == ratios
+
+
+def test_resume_treats_a_fanned_out_full_baseline_as_complete():
+    """full is measured once and copied to every ratio, so seeing it at any ratio
+    means it is done. Without this a resume would rerun the most expensive baseline."""
+    ratios = [0.5, 0.25, 0.125]
+    records = phase4._fan_out(
+        [{"task": "gov_report", "policy": "full", "ratio": 0.5, "score": 0.3}], ratios)
+    done = phase4.done_keys(records)
+    assert phase4._pending("gov_report", "full", ratios, done) == []
+    assert phase4._pending("gov_report", "adaptive", ratios, done) == ratios

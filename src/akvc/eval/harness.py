@@ -12,7 +12,8 @@ absolute token count each policy actually received is recorded alongside.
 
 import torch
 
-from akvc.model import build_inputs, manual_decode, decode_with_policy
+from akvc.model import (build_inputs, chunked_prefill, manual_decode,
+                        decode_with_policy)
 from akvc.cache_manager import cache_length, evict
 from akvc.instrumentation import timer, kv_cache_bytes
 from akvc.policies.streaming_llm import StreamingLLMPolicy
@@ -63,14 +64,9 @@ def _run_snapkv(model, tokenizer, inputs, budget, window, max_new_tokens, metric
     n_prompt = inputs["input_ids"].shape[1]
 
     with timer() as t_prefill:
-        out = model(**inputs, use_cache=True, output_attentions=True)
-    past = out.past_key_values
-
-    w = min(window, n_prompt)
-    importance = None
-    for a in out.attentions:
-        score = a[0, :, -w:, :].float().sum(dim=0).sum(dim=0)
-        importance = score if importance is None else importance + score
+        past, logits, _, importance = chunked_prefill(
+            model, inputs["input_ids"], attention_mask=inputs["attention_mask"],
+            need_importance=True, observation_window=window)
 
     # Measured before the compression, so this is comparable to the other policies:
     # prefill materializes the whole cache either way.
@@ -80,7 +76,7 @@ def _run_snapkv(model, tokenizer, inputs, budget, window, max_new_tokens, metric
         evict(past, keep)
     decode_peak_kv = kv_cache_bytes(past)
 
-    next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+    next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
     generated = [next_token]
     abs_pos = n_prompt
     with timer() as t_decode:
